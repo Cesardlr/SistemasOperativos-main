@@ -21,6 +21,7 @@ const algorithmOptions = [
     { value: "RR", label: "Round Robin" },
     { value: "NPP", label: "Non-Preemptive Priority" },
     { value: "PP", label: "Preemptive Priority" },
+    { value: "HRRN", label: "Highest Response Ratio Next" },
 ];
 
 export default function ProcessScheduler() {
