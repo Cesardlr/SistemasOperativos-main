@@ -1,4 +1,3 @@
-# -- coding: utf-8 --
 import os, re, argparse, time, json, glob, sys, traceback, threading
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
@@ -102,7 +101,7 @@ def do_actual_processing_for_file(txt_content: str, fila_resultante_ref: dict):
             if valores_encontrados_para_columna:
                 fila_resultante_ref[col] = '; '.join(sorted(list(valores_encontrados_para_columna)))
                 datos_encontrados_global = True
-        except Exception as e_regex: # Simplificado, el error se maneja en el llamador principal
+        except Exception as e_regex:
             # No imprimimos warning por cada regex para no saturar, la columna quedará "Not Mention"
             # print(f"DEBUG_SERVIDOR_PY: WARN: Regex para '{col}' falló: {e_regex}", file=sys.stderr, flush=True)
             pass 
@@ -140,11 +139,11 @@ def procesar_archivo_y_emitir_fila(path: str, client_id_stdout: str, worker_visu
     """
 
     nombre_base_archivo = os.path.basename(path)
-    # MODIFICADO: fila_resultante se inicializa sin "Error Info"
+    
     fila_resultante = {col: 'Not Mention' for col in COLUMNAS_ORDENADAS}
     fila_resultante["Processed File Name"] = nombre_base_archivo
     
-    # MODIFICADO: Variable local para almacenar el mensaje de error del archivo actual
+   
     current_file_error_message = "None"
 
     try:
@@ -152,9 +151,9 @@ def procesar_archivo_y_emitir_fila(path: str, client_id_stdout: str, worker_visu
             txt = fh.read()
 
         if not txt.strip():
-            # MODIFICADO: Se actualiza la variable local en lugar de fila_resultante["Error Info"]
+           
             current_file_error_message = "File is empty or whitespace only"
-            # print(f"DEBUG_SERVIDOR_PY: Archivo '{nombre_base_archivo}' vacío.", file=sys.stderr, flush=True)
+          
         else:
             # Siempre hacemos el procesamiento real de datos
             datos_encontrados = do_actual_processing_for_file(txt, fila_resultante)
@@ -166,27 +165,27 @@ def procesar_archivo_y_emitir_fila(path: str, client_id_stdout: str, worker_visu
             time.sleep(simulate_processing_delay_ms / 1000.0)
 
     except FileNotFoundError:
-        # MODIFICADO: Se actualiza la variable local
+
         current_file_error_message = f"Archivo no encontrado: {path}"
     except IOError as e_io:
-        # MODIFICADO: Se actualiza la variable local
+
         current_file_error_message = f"Error I/O leyendo {nombre_base_archivo}: {e_io}"
     except Exception as e_general:
-        # MODIFICADO: Se actualiza la variable local
+
         current_file_error_message = f"Error inesperado procesando {nombre_base_archivo}: {type(e_general).__name__} - {e_general}" # Corregido _name_ a __name__
         print(f"DEBUG_SERVIDOR_PY: EXCEPCION en procesar_archivo_y_emitir_fila para '{nombre_base_archivo}': {e_general}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
 
     # Emitir la fila
-    # MODIFICADO: La condición para el mensaje de progreso usa current_file_error_message
+    
     if current_file_error_message != "None" and current_file_error_message != "File is empty or whitespace only":
         print(json.dumps({"type": "progress_message", "client_id": client_id_stdout, "message": f"Error procesando {nombre_base_archivo}: {current_file_error_message}"}), flush=True)
     
     print(json.dumps({
         "type": "csv_data_row",
         "client_id": client_id_stdout,
-        "data": fila_resultante # fila_resultante ya no tiene "Error Info"
+        "data": fila_resultante 
     }), flush=True)
-    # print(f"DEBUG_SERVIDOR_PY: Fila emitida para '{nombre_base_archivo}'.", file=sys.stderr, flush=True)
+    
 
 # main() es la función principal que maneja la lógica del script
 def main():
@@ -265,7 +264,7 @@ def main():
     print(json.dumps({"type": "progress_message", "client_id": client_id, "message": msg_proc}), flush=True)
 
     files_processed_ok = 0
-    # files_with_errors ya no es necesario aquí, ya que el error se maneja dentro de procesar_archivo_y_emitir_fila para el mensaje de progreso
+   
     futures_exceptions = 0 
 
     if executor_type: 
@@ -285,10 +284,10 @@ def main():
                         futures_exceptions += 1
                         print(f"DEBUG_SERVIDOR_PY: EXCEPCION DEL FUTURE para '{ruta_f_original}': {exc_future}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
                         print(json.dumps({"type": "progress_message", "client_id": client_id, "message": f"Error grave en worker para {os.path.basename(ruta_f_original)}: {exc_future}"}), flush=True)
-                        # MODIFICADO: error_fila ya no tendrá "Error Info"
+                       
                         error_fila = {col: 'ERROR' for col in COLUMNAS_ORDENADAS}
                         error_fila["Processed File Name"] = os.path.basename(ruta_f_original)
-                        # La línea error_fila["Error Info"] = ... se elimina
+                       
                         print(json.dumps({"type": "csv_data_row", "client_id": client_id, "data": error_fila}), flush=True)
 
         except Exception as e_executor: 
@@ -299,16 +298,16 @@ def main():
     else: 
         for idx, ruta_f in enumerate(archivos_a_procesar):
             try:
-                procesar_archivo_y_emitir_fila(ruta_f, client_id, idx % num_workers_visual_gui, num_workers_visual_gui, args.simulate_delay_ms) # Ajustado idx para worker_visual_id
+                procesar_archivo_y_emitir_fila(ruta_f, client_id, idx % num_workers_visual_gui, num_workers_visual_gui, args.simulate_delay_ms) 
                 files_processed_ok +=1 
             except Exception as exc_seq: 
                 futures_exceptions += 1
                 print(f"DEBUG_SERVIDOR_PY: ERROR CATASTRÓFICO en bucle secuencial para '{ruta_f}': {exc_seq}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
                 print(json.dumps({"type": "progress_message", "client_id": client_id, "message": f"Error grave procesando {os.path.basename(ruta_f)}: {exc_seq}"}), flush=True)
-                # MODIFICADO: error_fila ya no tendrá "Error Info"
+               
                 error_fila = {col: 'ERROR' for col in COLUMNAS_ORDENADAS}
                 error_fila["Processed File Name"] = os.path.basename(ruta_f)
-                # La línea error_fila["Error Info"] = ... se elimina
+                
                 print(json.dumps({"type": "csv_data_row", "client_id": client_id, "data": error_fila}), flush=True)
 
 
@@ -332,5 +331,5 @@ def main():
     print(f"DEBUG_SERVIDOR_PY: Finalizando script. Sumario: {summary}", file=sys.stderr, flush=True)
     print(json.dumps({"type": "processing_complete", "client_id": client_id, "summary": summary}), flush=True)
 
-if __name__ == '__main__': # Corregido _name_ y _main_ a __name__ y __main__
+if __name__ == '__main__': 
     main()

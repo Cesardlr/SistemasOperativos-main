@@ -51,7 +51,9 @@ function hrrn(arrivalTime, burstTime) {
       bt: p.Rafaga,
       ft: p.Finalizacion,
       tat: p.Retorno,
-      wat: p.Espera
+      wat: p.Espera,
+      weightedTAT: p.weightedTAT,
+      response: p.response
     })),
     ganttChartInfo: results.gantt.map(g => ({
       job: g.pid,
@@ -59,6 +61,8 @@ function hrrn(arrivalTime, burstTime) {
       stop: g.finish
     })),
     avgWT: results.avgWT,
-    avgTAT: results.avgTAT
+    avgTAT: results.avgTAT,
+    avgWeightedTAT: results.avgWeightedTAT,
+    avgResponse: results.avgResponse
   };
 } 

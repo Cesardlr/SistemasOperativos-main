@@ -16,6 +16,8 @@ class HRRNScheduler {
       turnaround: 0,
       completion: 0,
       finished: false,
+      responseTime: -1, 
+      weightedTAT: 0,  
     }));
 
   
@@ -56,6 +58,12 @@ class HRRNScheduler {
       
       const current = this._pickProcess(ready);
       const start = this.clock;
+      
+    // tiempo de respuesta 
+      if (current.responseTime === -1) {
+        current.responseTime = start - current.arrival;
+      }
+      
       this.clock += current.burst;
       const finish = this.clock;
 
@@ -63,19 +71,10 @@ class HRRNScheduler {
       current.completion = finish;
       current.turnaround = finish - current.arrival;
       current.waiting = current.turnaround - current.burst;
+      current.weightedTAT = current.turnaround / current.burst;
 
      
       this.gantt.push({ pid: current.pid, start, finish });
-
-      const solvedProcessesInfo = this.processes.map((p) => ({
-        ...p,
-        ft: finish,
-        tat: finish - p.arrival,
-        wat: finish - p.arrival - p.burst,
-        weightedTat: (finish - p.arrival) / p.burst,
-        weightedWat: (finish - p.arrival - p.burst) / p.burst,
-        responseTime: p.arrival === start ? 0 : start - p.arrival
-      }));
     }
   }
 
@@ -86,8 +85,10 @@ class HRRNScheduler {
     const avgTurnaround =
       this.processes.reduce((s, p) => s + p.turnaround, 0) /
       this.processes.length;
-    const avgWeightedTat = this.processes.reduce((s, p) => s + ((p.turnaround) / p.burst), 0) / this.processes.length;
-    const avgResponseTime = this.processes.reduce((s, p) => s + (p.arrival === p.completion - p.burst ? 0 : p.completion - p.burst - p.arrival), 0) / this.processes.length;
+    const avgWeightedTat = 
+      this.processes.reduce((s, p) => s + p.weightedTAT, 0) / this.processes.length;
+    const avgResponseTime = 
+      this.processes.reduce((s, p) => s + p.responseTime, 0) / this.processes.length;
 
     return {
       processes: this.processes.map((p) => ({
@@ -97,8 +98,8 @@ class HRRNScheduler {
         Espera: p.waiting,
         Retorno: p.turnaround,
         Finalizacion: p.completion,
-        weightedTAT: p.turnaround / p.burst,
-        response: p.arrival === p.completion - p.burst ? 0 : p.completion - p.burst - p.arrival
+        weightedTAT: p.weightedTAT,
+        response: p.responseTime
       })),
       gantt: this.gantt,
       avgWT: avgWaiting,
