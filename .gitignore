@@ -5,6 +5,7 @@
 /.pnp
 .pnp.js
 
+cliente/node_modules
 
 /uploaded_files_from_client
 

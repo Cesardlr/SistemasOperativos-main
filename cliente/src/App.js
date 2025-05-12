@@ -1,6 +1,5 @@
-// src/App.jsx
 import React from "react";
-import ProcessScheduler from "./ProcessScheduler"; // adjust the path as needed
+import ProcessScheduler from "./ProcessScheduler"; 
 
 export default function App() {
   return (

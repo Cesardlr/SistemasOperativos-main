@@ -34,6 +34,7 @@ import {
 import DeleteIcon from "@mui/icons-material/Delete"; 
 import { motion } from "framer-motion";
 
+// Colores para Gantt
 const COLORS = [
   "#4caf50",
   "#2196f3",
@@ -43,6 +44,7 @@ const COLORS = [
   "#03a9f4",
 ];
 
+// Opciones de algoritmos
 const algorithmOptions = [
   { value: "FCFS", label: "First-Come First-Served" },
   { value: "SJF", label: "Shortest Job First" },
@@ -53,6 +55,8 @@ const algorithmOptions = [
   { value: "HRRN", label: "Highest Response Ratio Next" },
 ];
 
+
+// Inputs y opciones
 export default function ProcessScheduler() {
   const [arrivalInput, setArrivalInput] = useState("");
   const [burstInput, setBurstInput] = useState("");
@@ -60,6 +64,7 @@ export default function ProcessScheduler() {
   const [algorithm, setAlgorithm] = useState("FCFS");
   const [timeQuantum, setTimeQuantum] = useState("2");
 
+    // Referencias y selección de archivos
   const fileRef = useRef(null);
   const [optionType, setOptionType] = useState("thread");
   const [optionCount, setOptionCount] = useState("1");
@@ -70,6 +75,9 @@ export default function ProcessScheduler() {
     ganttChartInfo: [],
   });
 
+
+
+  // WebSocket y estado de stream CSV
   const ws = useRef(null);
   const csvRowBuffer = useRef([]);
   const bufferTimeout = useRef(null);
@@ -95,6 +103,7 @@ export default function ProcessScheduler() {
     }
   };
 
+   // Manejar eventos WS
   const handleWsMessage = useCallback(
     (event) => {
       try {
@@ -211,6 +220,8 @@ export default function ProcessScheduler() {
     [subscribedEvents, rutasArchivosSubidos]
   ); 
 
+
+   // Inicializar WS
   useEffect(() => {
 
     setServerResponseMessage("Intentando conectar a ws://localhost:8765...");
@@ -247,17 +258,23 @@ export default function ProcessScheduler() {
     };
   }, []);
 
+
+    // Asignar onmessage
   useEffect(() => {
     if (ws.current) {
       ws.current.onmessage = handleWsMessage;
     }
   }, [ws.current, handleWsMessage]);
 
+
+    // Suscribir/desuscribir eventos
   const handleSubscribe = (eventName) =>
     sendMessage({ tipo: "suscribir", evento: eventName });
   const handleUnsubscribe = (eventName) =>
     sendMessage({ tipo: "desuscribir", evento: eventName });
 
+
+    // Subir archivos
   const onFileChange = async (e) => {
     console.log("DEBUG: onFileChange iniciado.");
     const files = e.target.files;
@@ -396,7 +413,7 @@ export default function ProcessScheduler() {
     console.log("DEBUG: onFileChange finalizado.");
   };
 
- 
+   // Quitar archivo
   const handleRemoveFile = (filePathToRemove) => {
     console.log("DEBUG: Intentando quitar archivo:", filePathToRemove);
     setRutasArchivosSubidos((prevPaths) => {
@@ -411,6 +428,8 @@ export default function ProcessScheduler() {
     });
   };
 
+
+    // Configurar concurrencia
   const handleSendServerConfig = () => {
     
     if (!optionType) {
@@ -438,6 +457,8 @@ export default function ProcessScheduler() {
     );
   };
 
+
+    // Simulación local
   const simulate = () => {
     const at = arrivalInput
       .trim()
@@ -477,6 +498,8 @@ export default function ProcessScheduler() {
     setServerResponseMessage("Simulación local de scheduling completada.");
   };
 
+
+    // Descargar CSV
   const descargarCsvStream = () => {
     if (csvFilasEnProgreso.length === 0) {
       setServerResponseMessage("No hay datos CSV para descargar.");
@@ -522,6 +545,8 @@ export default function ProcessScheduler() {
     }
   };
 
+
+   // Métricas
   const { solvedProcessesInfo, ganttChartInfo } = results;
   const avgTAT = solvedProcessesInfo.length
     ? solvedProcessesInfo.reduce((s, r) => s + r.tat, 0) /
@@ -531,7 +556,17 @@ export default function ProcessScheduler() {
     ? solvedProcessesInfo.reduce((s, r) => s + r.wat, 0) /
       solvedProcessesInfo.length
     : 0;
+  const avgWeightedTAT = solvedProcessesInfo.length
+    ? solvedProcessesInfo.reduce((s, r) => s + (r.weightedTAT || 0), 0) /
+      solvedProcessesInfo.length
+    : 0;
+  const avgResponse = solvedProcessesInfo.length
+    ? solvedProcessesInfo.reduce((s, r) => s + (r.response || 0), 0) /
+      solvedProcessesInfo.length
+    : 0;
 
+
+      // Componente Gantt
   const GanttChart = () => {
     if (
       !ganttChartInfo ||
@@ -816,7 +851,7 @@ export default function ProcessScheduler() {
                     <TableCell align="center">
                       {row.weightedTAT?.toFixed(2) || "-"}
                     </TableCell>
-                    <TableCell align="center">{row.response}</TableCell>
+                    <TableCell align="center">{row.response || "-"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -829,11 +864,10 @@ export default function ProcessScheduler() {
                 Promedio Waiting Time: {avgWT.toFixed(2)}
               </Typography>
               <Typography variant="subtitle1">
-                Promedio Weighted Turnaround Time:{" "}
-                {results.avgWeightedTAT?.toFixed(2) || "-"}
+                Promedio Weighted Turnaround Time: {avgWeightedTAT.toFixed(2)}
               </Typography>
               <Typography variant="subtitle1">
-                Promedio Response Time: {results.avgResponse?.toFixed(2) || "-"}
+                Promedio Response Time: {avgResponse.toFixed(2)}
               </Typography>
             </Box>
             <GanttChart />
