@@ -1,27 +1,20 @@
-import asyncio
-import websockets
-import json
-import logging
-import os
-# import time # No se usa directamente, pero podría ser útil para futuras extensiones
-import subprocess # Ya lo estás usando
-import sys # Útil para obtener la ruta del ejecutable de Python
-
+# -*- coding: utf-8 -*-
+import asyncio, websockets, json, logging, os, subprocess, sys
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+#Variables globales
+CLIENTS = {} # CLIENTS es un diccionario que almacena los clientes conectados al servidor WebSocket.
+EVENTS = {} # EVENTS es un diccionario que almacena los eventos disponibles en el servidor.
+SUBSCRIPTIONS = {} # SUBSCRIPTIONS es un diccionario que almacena los eventos a los que están suscritos los clientes.
+CLIENT_CONFIGS = {} # CLIENT_CONFIGS es un diccionario que almacena la configuración de cada cliente, como el número de hilos y el modo de concurrencia.
 
-CLIENTS = {} # Almacena websocket: {"id": client_id_str}
-EVENTS = {} 
-SUBSCRIPTIONS = {} # Almacena evento: {websocket1, websocket2}
-# Modificado para incluir concurrency_mode por defecto
-CLIENT_CONFIGS = {} # client_id_str: {"threads": int, "concurrency_mode": str}
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) # BASE_DIR es el directorio base del script actual.
+SCRIPT_SERVIDOR_PY = os.path.join(BASE_DIR, "servidor.py") # SCRIPT_SERVIDOR_PY es la ruta al script servidor.py que se ejecutará para procesar archivos CSV.
+TEXT_FILES_DIR = os.path.join(os.path.dirname(BASE_DIR), "english_text_files") # TEXT_FILES_DIR es el directorio donde se almacenan los archivos de texto por defecto.
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_SERVIDOR_PY = os.path.join(BASE_DIR, "servidor.py")
-TEXT_FILES_DIR = os.path.join(os.path.dirname(BASE_DIR), "english_text_files")
-
-
+# get_client_id_from_websocket es una función auxiliar para obtener el ID del cliente desde el websocket.
+#Parametros: websocket que es el objeto websocket del cliente, devuelve el ID del cliente como una cadena.
 def get_client_id_from_websocket(websocket):
     """Intenta obtener el ID del cliente desde el diccionario CLIENTS."""
     client_data = CLIENTS.get(websocket)
@@ -29,6 +22,8 @@ def get_client_id_from_websocket(websocket):
         return client_data.get("id", str(id(websocket))) # Fallback al id del objeto si no está el 'id'
     return str(id(websocket)) # Fallback si el websocket no está en CLIENTS (raro aquí)
 
+# enviar_mensaje es una función que envía un mensaje a un cliente WebSocket.
+#Parametros: websocket que es el objeto websocket del cliente, tipo_mensaje que es el tipo de mensaje a enviar, data que es la información adicional a enviar y mensaje_texto que es el texto del mensaje.
 async def enviar_mensaje(websocket, tipo_mensaje, data=None, mensaje_texto=None):
     payload = {"tipo": tipo_mensaje}
     if data:
@@ -36,14 +31,11 @@ async def enviar_mensaje(websocket, tipo_mensaje, data=None, mensaje_texto=None)
     if mensaje_texto:
         payload["mensaje"] = mensaje_texto
     
-    # Obtener client_id para logging de forma más directa si es posible
     client_id_for_log = get_client_id_from_websocket(websocket)
 
     try:
-        # No es necesario chequear websocket.open; send() lanzará excepción si está cerrado.
         await websocket.send(json.dumps(payload))
     except websockets.exceptions.ConnectionClosed:
-        # El cliente ya se desconectó, CLIENTS[websocket] podría no existir si la limpieza ya ocurrió.
         logging.warning(
             f"Intento de envío a conexión WS ya cerrada para cliente {client_id_for_log} ({websocket.remote_address}). Tipo: {tipo_mensaje}"
         )
@@ -51,24 +43,26 @@ async def enviar_mensaje(websocket, tipo_mensaje, data=None, mensaje_texto=None)
         logging.error(
             f"Error enviando mensaje por WS a {client_id_for_log} ({websocket.remote_address}): {e}. Tipo: {tipo_mensaje}"
         )
-
+#broadcast_mensaje es una función que envía un mensaje a todos los clientes conectados.
+#Parametros: tipo_mensaje que es el tipo de mensaje a enviar, data que es la información adicional a enviar y mensaje_texto que es el texto del mensaje.
 async def broadcast_mensaje(tipo_mensaje, data=None, mensaje_texto=None):
     if CLIENTS:
-        # Copiamos las keys porque CLIENTS podría modificarse durante la iteración si un cliente se desconecta
         clients_actuales = list(CLIENTS.keys())
         logging.info(f"Broadcasting '{tipo_mensaje}' a {len(clients_actuales)} clientes.")
-        # Creamos tareas para enviar mensajes a todos los clientes concurrentemente
-        # return_exceptions=True para que un error en un envío no detenga los demás
         tasks = [
             enviar_mensaje(client, tipo_mensaje, data, mensaje_texto)
             for client in clients_actuales
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
 
+#get_client_id_str es una función que genera un ID de cliente basado en el id del objeto websocket.
+#Parametros: websocket que es el objeto websocket del cliente, devuelve el ID del cliente como una cadena.
 def get_client_id_str(websocket):
     """Genera un ID de cliente basado en el id del objeto websocket."""
     return str(id(websocket))
 
+#procesar_archivos_via_script es una función que ejecuta un script de Python para procesar archivos CSV.
+#Parametros: websocket_cliente que es el objeto websocket del cliente, id_cliente_ws_str que es el ID del cliente como cadena, lista_rutas_archivos_a_procesar que es la lista de rutas de archivos a procesar, directorio_default_si_lista_vacia que es el directorio por defecto si la lista está vacía, num_workers que es el número de trabajadores a usar y concurrency_mode que es el modo de concurrencia.
 async def procesar_archivos_via_script(
     websocket_cliente,
     id_cliente_ws_str,
@@ -210,9 +204,8 @@ async def procesar_archivos_via_script(
             "error_servidor",
             mensaje_texto=f"Error crítico al manejar el script de procesamiento: {str(e)}",
         )
-
-# Ya no es necesaria esta línea de depuración o es incorrecta si fue para el 'path'
-# print("!!! INFO: Definiendo manejar_cliente con (websocket, path) !!!") 
+# manejar_cliente es una función que maneja la conexión de un cliente WebSocket.
+#Parametros: websocket que es el objeto websocket del cliente.
 async def manejar_cliente(websocket): 
     client_id_str = get_client_id_str(websocket)
     CLIENTS[websocket] = {"id": client_id_str, "ws": websocket} # Guardar también el objeto ws para referencia si es útil
@@ -272,6 +265,7 @@ async def manejar_cliente(websocket):
                     concurrency_mode = data.get("concurrency_mode", CLIENT_CONFIGS[client_id_str].get("concurrency_mode", "thread"))
 
                     if isinstance(num_threads, int) and num_threads > 0 and concurrency_mode in ["thread", "process"]:
+                        num_threads = 1 if num_threads > 0 else num_threads
                         CLIENT_CONFIGS[client_id_str]["threads"] = num_threads
                         CLIENT_CONFIGS[client_id_str]["concurrency_mode"] = concurrency_mode
                         logging.info(
@@ -292,6 +286,34 @@ async def manejar_cliente(websocket):
                             "error_servidor",
                             mensaje_texto=f"Configuración inválida: Threads debe ser número >0, Modo debe ser 'thread' o 'process'.",
                         )
+                
+                elif tipo_mensaje == "notificar_parametros_simulacion_cliente": 
+                    params_payload = data.get("payload", {})
+                    if params_payload and client_id_str in CLIENT_CONFIGS:
+                        # Actualizar la configuración del cliente con estos parámetros
+                        CLIENT_CONFIGS[client_id_str]["last_gui_simulation_params"] = {
+                            "algorithm": params_payload.get("algorithm"),
+                            "arrival_times_str": params_payload.get("arrival_times_str"),
+                            "burst_times_str": params_payload.get("burst_times_str"),
+                            "priority_values_str": params_payload.get("priority_values_str"),
+                            "time_quantum_str": params_payload.get("time_quantum_str")
+                        }
+                        log_msg = (
+                            f"Cliente {client_id_str} notificó parámetros de su simulación GUI local: "
+                            f"Algo={params_payload.get('algorithm')}, "
+                            f"ATs='{str(params_payload.get('arrival_times_str',''))[:30]}...', " # Limitar longitud para log
+                            f"BTs='{str(params_payload.get('burst_times_str',''))[:30]}...'"  # Limitar longitud para log
+                        )
+                        logging.info(log_msg)
+                        # Enviar confirmación al cliente (opcional)
+                        await enviar_mensaje(
+                            websocket,
+                            "confirmacion_notificacion_simulacion_recibida", 
+                            mensaje_texto="Servidor ha recibido los parámetros de su simulación local."
+                        )
+                    else:
+                        logging.warning(f"Cliente {client_id_str} envió notificación de simulación sin payload o cliente no encontrado en configs.")
+                        await enviar_mensaje(websocket, "error_servidor", mensaje_texto="Payload inválido en notificación de simulación.")
                 
                 elif tipo_mensaje == "solicitar_procesamiento_csv":
                     lista_rutas_cliente = data.get("rutas_archivos_subidos", [])
@@ -375,6 +397,8 @@ async def manejar_cliente(websocket):
                     del SUBSCRIPTIONS[evento]
         logging.info(f"Cliente {client_id_str} completamente eliminado de listas y suscripciones.")
 
+# servidor_cli es una función que maneja la interfaz de línea de comandos del servidor.
+#Parametros: ninguno.
 async def servidor_cli():
     loop = asyncio.get_running_loop()
     logging.info("CLI del servidor WS (CSV Stream) iniciada. Escribe 'help' para ver los comandos.")
@@ -454,9 +478,6 @@ async def servidor_cli():
                     print(f"Error: Evento '{event_name}' no encontrado para disparar.")
             elif cmd == "exit":
                 logging.info("Comando 'exit' recibido. Cerrando servidor...")
-                # Para que el servidor principal se cierre, necesitamos cancelar esta tarea
-                # o hacer que devuelva algo que main() pueda interpretar para salir.
-                # Devolver True es una forma simple de señalar que el CLI quiere cerrar.
                 return True 
             else:
                 print("Comando desconocido. Escribe 'help'.")
@@ -465,9 +486,8 @@ async def servidor_cli():
             return True # También señalamos cierre aquí
         except Exception as e:
             logging.exception(f"Error en CLI del servidor: {e}")
-            # Podríamos querer continuar el CLI a pesar de un error en un comando.
-            # Si el error es grave, el logging.exception lo registrará.
-
+            
+# main es la función principal que inicia el servidor WebSocket y maneja la configuración inicial.
 async def main():
     if not os.path.isdir(TEXT_FILES_DIR):
         logging.warning(f"El directorio por defecto de archivos de texto '{TEXT_FILES_DIR}' no existe. Creándolo...")
@@ -504,9 +524,6 @@ async def main():
             
             cierre_tasks = []
             for client_ws in clients_a_notificar:
-                # Usamos client.send() directamente aquí, no enviar_mensaje,
-                # para tener control sobre el timeout y porque el formato es simple.
-                # No es necesario 'if client.open', send() lanzará excepción si está cerrado.
                 try:
                     # Usamos un timeout para no esperar indefinidamente a un cliente que no responde
                     task = asyncio.wait_for(client_ws.send(msg_cierre_str), timeout=2.0)
@@ -521,9 +538,6 @@ async def main():
                 results = await asyncio.gather(*cierre_tasks, return_exceptions=True)
                 for i, result in enumerate(results):
                     if isinstance(result, Exception):
-                        # El cliente correspondiente es el de la lista original en la misma posición
-                        # Pero es más robusto obtenerlo si la lista de tasks y clientes no se desalinea.
-                        # Aquí, como falló un 'send', el cliente ya no nos importa tanto.
                         logging.warning(f"Error enviando mensaje de cierre a un cliente: {result}")
         
         server.close()

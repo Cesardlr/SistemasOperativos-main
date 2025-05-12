@@ -1,19 +1,9 @@
-# -*- coding: utf-8 -*-
-import os
-import re
-import argparse
-import time
-# import psutil # Descomenta si quieres usarlo para limitar workers reales
-import json
-import glob
+# -- coding: utf-8 --
+import os, re, argparse, time, json, glob, sys, traceback, threading
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-import sys
-import traceback
-import threading # Para obtener IDs de hilos reales si es útil
 
-# --- Tus constantes y definiciones (APELLIDOS_SE, NOMBRES_PERSONA, etc.) ---
-# ... (Mantenlas como están en tu archivo original) ...
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# Configuración de la ruta del script y las variables globales
+ROOT = os.path.dirname(os.path.abspath(__file__)) # Corregido _file_ a __file__
 APELLIDOS_SE = ["Andersson", "Johansson", "Eriksson", "Nilsson", "Larsson", "Svensson", "Carlsson", "Persson", "Gustafsson", "Pettersson", "Jansson", "Olsson"]
 NOMBRES_PERSONA = ["Conrad Reinell", "Annie Erickson", "Mary Livingston", "Erik Andersson", "Olof Jernberg"] + APELLIDOS_SE
 PAISES = ["Sweden", "Norway", "Denmark", "Finland", "Germany", "Canada", "USA"]
@@ -26,15 +16,18 @@ EVENTOS_HIST = ["World War I", "World War II", "Great Depression", "Prohibition"
 IGLESIAS = ["Lutheran", "Baptist", "Methodist", "Quaker", "Augustana Evangelical Lutheran Church", "Swedish Mission Covenant Church"]
 ESC_FIJO = ["Augustana College", "Northwestern College", "Sacred Heart School"]
 
+# Aqui con build_pattern() se construyen los patrones regex para los nombres, ocupaciones, etc.
 def build_pattern(words, *, plural=False, boundaries=True):
     esc = [re.escape(w) for w in words]
     pat = r"(?:%s)" % "|".join(esc)
     if plural: pat = f"{pat}s?"
     return rf"\b{pat}\b" if boundaries else pat
 
+#grp0_or_1() es una función auxiliar para manejar grupos de regex
 def grp0_or_1(m, grp):
     return m.group(grp) if (m and m.lastindex is not None and grp <= m.lastindex) else (m.group(0) if m else '')
 
+# Definición de patrones regex para fechas, nombres, ocupaciones, etc.
 REGEX_AÑO = r"(18[5-9]\d|19[0-2]\d)"
 REGEX_YMD = rf"{REGEX_AÑO}[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])"
 REGEX_LARGA = (rf"(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s)?"
@@ -79,13 +72,16 @@ try:
         ("Cultural Practices", build_pattern(["Midsommar", "Lucia", "Jul", "Christmas", "Easter", "Thanksgiving"]), 0),
     ]
     PATRONES = [(col, re.compile(rx, re.IGNORECASE | re.UNICODE), grp) for col, rx, grp in PATRONES_DATA]
-    COLUMNAS_ORDENADAS = [col for col, _, _ in PATRONES_DATA] + ["Processed File Name", "Error Info", "Assigned Worker (Visual)"]
+    # MODIFICADO: Eliminada "Error Info" de COLUMNAS_ORDENADAS
+    COLUMNAS_ORDENADAS = [col for col, _, _ in PATRONES_DATA] + ["Processed File Name"]
 except re.error as e:
     error_msg = f"Error fatal compilando Regex: {e}"
     print(json.dumps({"type": "script_error", "message": error_msg}), flush=True)
     print(f"SERVIDOR.PY CRITICAL: {error_msg}", file=sys.stderr, flush=True)
     sys.exit(1)
-
+    
+#do_actual_processing_for_file() aplica las regex al contenido del texto y actualiza fila_resultante_ref
+#parametros: txt_content: contenido del archivo, fila_resultante_ref: diccionario de resultados
 def do_actual_processing_for_file(txt_content: str, fila_resultante_ref: dict):
     """
     Aplica todas las regex al contenido del texto y actualiza fila_resultante_ref.
@@ -110,8 +106,9 @@ def do_actual_processing_for_file(txt_content: str, fila_resultante_ref: dict):
             # No imprimimos warning por cada regex para no saturar, la columna quedará "Not Mention"
             # print(f"DEBUG_SERVIDOR_PY: WARN: Regex para '{col}' falló: {e_regex}", file=sys.stderr, flush=True)
             pass 
-            
-    # Lógica de limpieza
+        
+    # quitar_local() elimina nombres de columnas específicas de otras columnas recibe los parametros
+    # parametros: src_col: columna de origen, dst_col: columna de destino, fila_dict: diccionario de fila_resultante_ref
     def quitar_local(src_col, dst_col, fila_dict):
         val_src = fila_dict.get(src_col, 'Not Mention')
         val_dst = fila_dict.get(dst_col, 'Not Mention')
@@ -130,33 +127,33 @@ def do_actual_processing_for_file(txt_content: str, fila_resultante_ref: dict):
            fila_resultante_ref.get("Occupation") != 'Not Mention':
             fila_resultante_ref["Job Title"] = "Not Mention"
     except Exception as e_quitar:
-         print(f"DEBUG_SERVIDOR_PY: WARN: Lógica 'quitar' falló: {e_quitar}", file=sys.stderr, flush=True) # El nombre del archivo se puede loguear en el llamador
+            print(f"DEBUG_SERVIDOR_PY: WARN: Lógica 'quitar' falló: {e_quitar}", file=sys.stderr, flush=True) # El nombre del archivo se puede loguear en el llamador
     
     return datos_encontrados_global
 
+# procesar_archivo_y_emitir_fila() procesa un archivo .txt y emite una fila de resultados
+# parametros: path: ruta del archivo, client_id_stdout: ID del cliente, worker_visual_id: ID del worker visual, total_visual_workers: total de workers visuales
 def procesar_archivo_y_emitir_fila(path: str, client_id_stdout: str, worker_visual_id: int, total_visual_workers: int, simulate_processing_delay_ms: int = 0):
     """
     Procesa UN archivo .txt (aplicando regex reales), e incluye información del "worker visual".
     Puede simular un retardo si simulate_processing_delay_ms > 0.
     """
-    # Para depuración, puedes obtener el PID y TID real si es útil
-    # real_pid = os.getpid()
-    # real_tid = threading.get_ident() if threading else None
-    # print(f"DEBUG_SERVIDOR_PY: Procesando '{os.path.basename(path)}', Worker Visual: {worker_visual_id+1}/{total_visual_workers}, Real PID: {real_pid}, Real TID: {real_tid}", file=sys.stderr, flush=True)
 
     nombre_base_archivo = os.path.basename(path)
+    # MODIFICADO: fila_resultante se inicializa sin "Error Info"
     fila_resultante = {col: 'Not Mention' for col in COLUMNAS_ORDENADAS}
     fila_resultante["Processed File Name"] = nombre_base_archivo
-    fila_resultante["Error Info"] = "None"
-    fila_resultante["Assigned Worker (Visual)"] = f"{(worker_visual_id % total_visual_workers) + 1}/{total_visual_workers}"
-
+    
+    # MODIFICADO: Variable local para almacenar el mensaje de error del archivo actual
+    current_file_error_message = "None"
 
     try:
         with open(path, encoding='utf-8', errors='ignore') as fh:
             txt = fh.read()
 
         if not txt.strip():
-            fila_resultante["Error Info"] = "File is empty or whitespace only"
+            # MODIFICADO: Se actualiza la variable local en lugar de fila_resultante["Error Info"]
+            current_file_error_message = "File is empty or whitespace only"
             # print(f"DEBUG_SERVIDOR_PY: Archivo '{nombre_base_archivo}' vacío.", file=sys.stderr, flush=True)
         else:
             # Siempre hacemos el procesamiento real de datos
@@ -167,30 +164,31 @@ def procesar_archivo_y_emitir_fila(path: str, client_id_stdout: str, worker_visu
 
         if simulate_processing_delay_ms > 0:
             time.sleep(simulate_processing_delay_ms / 1000.0)
-            # Podrías añadir una columna "SimulatedDelay" a fila_resultante si quieres
-            # fila_resultante["SimulatedDelay"] = f"{simulate_processing_delay_ms}ms"
-
 
     except FileNotFoundError:
-        fila_resultante["Error Info"] = f"Archivo no encontrado: {path}"
+        # MODIFICADO: Se actualiza la variable local
+        current_file_error_message = f"Archivo no encontrado: {path}"
     except IOError as e_io:
-        fila_resultante["Error Info"] = f"Error I/O leyendo {nombre_base_archivo}: {e_io}"
+        # MODIFICADO: Se actualiza la variable local
+        current_file_error_message = f"Error I/O leyendo {nombre_base_archivo}: {e_io}"
     except Exception as e_general:
-        fila_resultante["Error Info"] = f"Error inesperado procesando {nombre_base_archivo}: {type(e_general).__name__} - {e_general}"
+        # MODIFICADO: Se actualiza la variable local
+        current_file_error_message = f"Error inesperado procesando {nombre_base_archivo}: {type(e_general).__name__} - {e_general}" # Corregido _name_ a __name__
         print(f"DEBUG_SERVIDOR_PY: EXCEPCION en procesar_archivo_y_emitir_fila para '{nombre_base_archivo}': {e_general}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
 
     # Emitir la fila
-    if fila_resultante["Error Info"] != "None" and fila_resultante["Error Info"] != "File is empty or whitespace only":
-         print(json.dumps({"type": "progress_message", "client_id": client_id_stdout, "message": f"Error procesando {nombre_base_archivo}: {fila_resultante['Error Info']}"}), flush=True)
+    # MODIFICADO: La condición para el mensaje de progreso usa current_file_error_message
+    if current_file_error_message != "None" and current_file_error_message != "File is empty or whitespace only":
+        print(json.dumps({"type": "progress_message", "client_id": client_id_stdout, "message": f"Error procesando {nombre_base_archivo}: {current_file_error_message}"}), flush=True)
     
     print(json.dumps({
         "type": "csv_data_row",
         "client_id": client_id_stdout,
-        "data": fila_resultante
+        "data": fila_resultante # fila_resultante ya no tiene "Error Info"
     }), flush=True)
     # print(f"DEBUG_SERVIDOR_PY: Fila emitida para '{nombre_base_archivo}'.", file=sys.stderr, flush=True)
 
-
+# main() es la función principal que maneja la lógica del script
 def main():
     t0_script = time.perf_counter()
     parser = argparse.ArgumentParser(description="Procesa archivos .txt y emite datos como JSON.")
@@ -207,10 +205,8 @@ def main():
     args = parser.parse_args()
     client_id = args.client_id
 
-    # Determinar workers reales para el pool y workers para la simulación visual
-    num_workers_visual_gui = args.workers # Lo que la GUI "quiere ver"
+    num_workers_visual_gui = args.workers
     
-    # Mensaje inicial
     msg_inicial_detalle = (
         f"Script 'servidor.py' para cliente {client_id}. "
         f"Modo Concurrencia Solicitado: {args.concurrency_mode}, "
@@ -220,7 +216,6 @@ def main():
     print(json.dumps({"type": "progress_message", "client_id": client_id, "message": msg_inicial_detalle}), flush=True)
     print(f"DEBUG_SERVIDOR_PY: main() llamado. Args: {args}", file=sys.stderr, flush=True)
 
-    # --- Determinar lista de archivos a procesar (sin cambios en esta parte) ---
     archivos_a_procesar = []
     if args.input_file:
         for ruta_f_arg in args.input_file:
@@ -228,39 +223,40 @@ def main():
             if os.path.isfile(ruta_normalizada) and ruta_normalizada.lower().endswith('.txt'):
                 archivos_a_procesar.append(ruta_normalizada)
             else:
-                # ... (manejo de advertencia)
+                print(json.dumps({"type": "progress_message", "client_id": client_id, "message": f"Advertencia: Archivo '{ruta_normalizada}' no es un .txt válido o no existe y será omitido."}), flush=True)
+                print(f"DEBUG_SERVIDOR_PY: Archivo '{ruta_normalizada}' inválido u omitido.", file=sys.stderr, flush=True)
                 pass 
     elif args.default_input_dir:
-        # ... (lógica para default_input_dir)
         dir_path = os.path.normpath(args.default_input_dir)
         if os.path.isdir(dir_path):
             patron_busqueda = os.path.join(dir_path, "*.txt")
             archivos_a_procesar = [f for f in glob.glob(patron_busqueda) if os.path.isfile(f)]
-        # ... (manejo de error si dir_path no es válido)
+            if not archivos_a_procesar:
+                 print(json.dumps({"type": "progress_message", "client_id": client_id, "message": f"No se encontraron archivos .txt en el directorio: {dir_path}"}), flush=True)
+        else:
+            print(json.dumps({"type": "progress_message", "client_id": client_id, "message": f"Error: El directorio por defecto '{dir_path}' no es válido o no existe."}), flush=True)
+            print(f"DEBUG_SERVIDOR_PY: Directorio por defecto '{dir_path}' inválido.", file=sys.stderr, flush=True)
+            print(json.dumps({"type": "processing_complete", "client_id": client_id, "summary": {"status": "error_invalid_directory"}}), flush=True)
+            return
 
 
     if not archivos_a_procesar:
-        # ... (manejo de no_files_found)
+        print(json.dumps({"type": "progress_message", "client_id": client_id, "message": "No se especificaron archivos .txt válidos para procesar."}), flush=True)
         print(json.dumps({"type": "processing_complete", "client_id": client_id, "summary": {"status": "no_files_found"}}), flush=True)
         return
 
     num_archivos_a_procesar = len(archivos_a_procesar)
     
-    # Configurar workers reales para el pool
     if args.concurrency_mode in ['thread', 'process']:
-        # Para paralelismo real, usamos num_workers_visual_gui como el deseado, pero podemos limitarlo
         workers_reales_pool = max(1, min(num_workers_visual_gui, num_archivos_a_procesar))
-        # Opcionalmente, limitar por psutil si es relevante
-        # if psutil and os.cpu_count(): workers_reales_pool = min(workers_reales_pool, os.cpu_count())
         executor_type = ThreadPoolExecutor if args.concurrency_mode == 'thread' else ProcessPoolExecutor
         msg_proc = f"Iniciando procesamiento CONCURRENTE REAL ({args.concurrency_mode}) de {num_archivos_a_procesar} archivo(s) con {workers_reales_pool} workers en pool (GUI simulará {num_workers_visual_gui})."
     
     elif args.concurrency_mode == 'sequential_visual':
-        workers_reales_pool = 1 # Backend es secuencial
-        executor_type = None # No usaremos Executor directamente en este modo
+        workers_reales_pool = 1 
+        executor_type = None 
         msg_proc = f"Iniciando procesamiento SECUENCIAL de {num_archivos_a_procesar} archivo(s) (GUI simulará {num_workers_visual_gui} workers)."
     else:
-        # Modo desconocido, default a secuencial simple
         workers_reales_pool = 1
         executor_type = None
         msg_proc = f"Modo concurrencia desconocido '{args.concurrency_mode}', usando secuencial simple. {num_archivos_a_procesar} archivo(s)."
@@ -269,67 +265,59 @@ def main():
     print(json.dumps({"type": "progress_message", "client_id": client_id, "message": msg_proc}), flush=True)
 
     files_processed_ok = 0
-    files_with_errors = 0 # Contará errores DENTRO de procesar_archivo_y_emitir_fila
-    futures_exceptions = 0 # Contará excepciones DEL POOL o del future.result()
+    # files_with_errors ya no es necesario aquí, ya que el error se maneja dentro de procesar_archivo_y_emitir_fila para el mensaje de progreso
+    futures_exceptions = 0 
 
-    if executor_type: # Modos 'thread' o 'process'
+    if executor_type: 
         try:
             with executor_type(max_workers=workers_reales_pool) as executor:
-                # Cada tarea recibe su índice para calcular el worker_visual_id
                 futures = {
-                    executor.submit(procesar_archivo_y_emitir_fila, ruta_f, client_id, idx, num_workers_visual_gui, args.simulate_delay_ms): (idx, ruta_f)
+                    executor.submit(procesar_archivo_y_emitir_fila, ruta_f, client_id, idx % num_workers_visual_gui, num_workers_visual_gui, args.simulate_delay_ms): (idx, ruta_f) # Ajustado idx para worker_visual_id
                     for idx, ruta_f in enumerate(archivos_a_procesar)
                 }
                 
                 for future_item in as_completed(futures):
                     idx_original, ruta_f_original = futures[future_item]
                     try:
-                        future_item.result() # Solo para capturar excepciones del worker
-                        # La función procesar_archivo_y_emitir_fila ya maneja la emisión y errores internos.
-                        # Contamos como "OK" si el worker no explotó. El error real del archivo está en la fila.
+                        future_item.result() 
                         files_processed_ok += 1 
                     except Exception as exc_future:
                         futures_exceptions += 1
                         print(f"DEBUG_SERVIDOR_PY: EXCEPCION DEL FUTURE para '{ruta_f_original}': {exc_future}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
                         print(json.dumps({"type": "progress_message", "client_id": client_id, "message": f"Error grave en worker para {os.path.basename(ruta_f_original)}: {exc_future}"}), flush=True)
-                        # Emitir una fila de error si el worker falló catastróficamente
+                        # MODIFICADO: error_fila ya no tendrá "Error Info"
                         error_fila = {col: 'ERROR' for col in COLUMNAS_ORDENADAS}
                         error_fila["Processed File Name"] = os.path.basename(ruta_f_original)
-                        error_fila["Error Info"] = f"Worker FAILED: {exc_future}"
-                        error_fila["Assigned Worker (Visual)"] = f"{(idx_original % num_workers_visual_gui) + 1}/{num_workers_visual_gui}"
+                        # La línea error_fila["Error Info"] = ... se elimina
                         print(json.dumps({"type": "csv_data_row", "client_id": client_id, "data": error_fila}), flush=True)
 
-        except Exception as e_executor: # Error con el Executor mismo
+        except Exception as e_executor: 
             print(f"DEBUG_SERVIDOR_PY: Error crítico con el Executor: {e_executor}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
             print(json.dumps({"type": "progress_message", "client_id": client_id, "message": f"Error crítico con Executor: {e_executor}"}), flush=True)
-            futures_exceptions = num_archivos_a_procesar - files_processed_ok # Asumir que el resto falló
+            futures_exceptions = num_archivos_a_procesar - files_processed_ok
 
-    else: # Modo 'sequential_visual' (o fallback desconocido)
+    else: 
         for idx, ruta_f in enumerate(archivos_a_procesar):
             try:
-                # procesar_archivo_y_emitir_fila ya maneja la emisión y errores internos.
-                procesar_archivo_y_emitir_fila(ruta_f, client_id, idx, num_workers_visual_gui, args.simulate_delay_ms)
-                files_processed_ok +=1 # Si no hay excepción aquí, contamos como OK
-            except Exception as exc_seq: # Error catastróficos en la llamada secuencial
+                procesar_archivo_y_emitir_fila(ruta_f, client_id, idx % num_workers_visual_gui, num_workers_visual_gui, args.simulate_delay_ms) # Ajustado idx para worker_visual_id
+                files_processed_ok +=1 
+            except Exception as exc_seq: 
                 futures_exceptions += 1
                 print(f"DEBUG_SERVIDOR_PY: ERROR CATASTRÓFICO en bucle secuencial para '{ruta_f}': {exc_seq}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
                 print(json.dumps({"type": "progress_message", "client_id": client_id, "message": f"Error grave procesando {os.path.basename(ruta_f)}: {exc_seq}"}), flush=True)
+                # MODIFICADO: error_fila ya no tendrá "Error Info"
                 error_fila = {col: 'ERROR' for col in COLUMNAS_ORDENADAS}
                 error_fila["Processed File Name"] = os.path.basename(ruta_f)
-                error_fila["Error Info"] = f"Sequential Call FAILED: {exc_seq}"
-                error_fila["Assigned Worker (Visual)"] = f"{(idx % num_workers_visual_gui) + 1}/{num_workers_visual_gui}"
+                # La línea error_fila["Error Info"] = ... se elimina
                 print(json.dumps({"type": "csv_data_row", "client_id": client_id, "data": error_fila}), flush=True)
 
-    # Contar filas con "Error Info" != "None" sería un conteo más preciso de `files_with_errors`
-    # Pero para este sumario, `files_processed_ok` son los que no crashearon el worker/llamada.
-    # `futures_exceptions` son los que sí crashearon.
 
     dt_script = time.perf_counter() - t0_script
     final_status = "completed"
-    if futures_exceptions > 0: # Si algún worker/llamada explotó
+    if futures_exceptions > 0: 
         final_status = "failed_catastrophically" if files_processed_ok == 0 else "completed_with_worker_exceptions"
     elif files_processed_ok == 0 and num_archivos_a_procesar > 0:
-         final_status = "completed_no_tasks_ok" # Podría ser que todos los archivos tuvieran errores internos (ej. vacíos) pero los workers no fallaron.
+         final_status = "completed_no_tasks_ok" 
     
     summary = {
         "files_attempted": num_archivos_a_procesar,
@@ -344,5 +332,5 @@ def main():
     print(f"DEBUG_SERVIDOR_PY: Finalizando script. Sumario: {summary}", file=sys.stderr, flush=True)
     print(json.dumps({"type": "processing_complete", "client_id": client_id, "summary": summary}), flush=True)
 
-if __name__ == '__main__':
+if __name__ == '__main__': # Corregido _name_ y _main_ a __name__ y __main__
     main()

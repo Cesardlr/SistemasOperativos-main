@@ -1,6 +1,11 @@
+// Implementación del algoritmo Shortest Remaining Time First (SRTF)
+// Este algoritmo ejecuta el proceso con el menor tiempo restante de ejecución
 export const srtf = (arrivalTime, burstTime) => {
+  // Creamos un array de objetos con la información de cada proceso
   const processesInfo = arrivalTime
     .map((item, index) => {
+      // Si hay más de 26 procesos, usamos P1, P2, etc.
+      // Si no, usamos letras (A, B, C, etc.)
       const job =
         arrivalTime.length > 26
           ? `P${index + 1}`
@@ -12,6 +17,7 @@ export const srtf = (arrivalTime, burstTime) => {
         bt: burstTime[index],
       };
     })
+    // Ordenamos los procesos por tiempo de llegada y ráfaga
     .sort((obj1, obj2) => {
       if (obj1.at > obj2.at) return 1;
       if (obj1.at < obj2.at) return -1;
@@ -20,33 +26,40 @@ export const srtf = (arrivalTime, burstTime) => {
       return 0;
     });
 
+  // Arrays para almacenar resultados
   const solvedProcessesInfo = [];
   const ganttChartInfo = [];
 
+  // Cola de procesos listos y tiempo actual
   const readyQueue = [];
   let currentTime = processesInfo[0].at;
   const unfinishedJobs = [...processesInfo];
 
+  // Mapa para llevar el registro del tiempo restante de cada proceso
   const remainingTime = processesInfo.reduce((acc, process) => {
     acc[process.job] = process.bt;
     return acc;
   }, {});
 
+  // Agregamos el primer proceso a la cola
   readyQueue.push(unfinishedJobs[0]);
+
+  // Mientras haya procesos sin terminar
   while (
     Object.values(remainingTime).reduce((acc, cur) => {
       return acc + cur;
     }, 0) &&
     unfinishedJobs.length > 0
   ) {
+    // Si la cola está vacía pero hay procesos sin terminar
     let prevIdle = false;
     if (readyQueue.length === 0 && unfinishedJobs.length > 0) {
       prevIdle = true;
       readyQueue.push(unfinishedJobs[0]);
     }
 
+    // Ordenamos la cola por tiempo restante
     readyQueue.sort((a, b) => {
-      // Equal-priority processes are scheduled in FCFS order.
       if (remainingTime[a.job] > remainingTime[b.job]) return 1;
       if (remainingTime[a.job] < remainingTime[b.job]) return -1;
       return 0;
@@ -54,6 +67,7 @@ export const srtf = (arrivalTime, burstTime) => {
 
     const processToExecute = readyQueue[0];
 
+    // Buscamos procesos que puedan interrumpir al actual
     const processATLessThanBT = processesInfo.filter((p) => {
       let curr = currentTime;
       if (prevIdle) {
@@ -68,6 +82,7 @@ export const srtf = (arrivalTime, burstTime) => {
       );
     });
 
+    // Verificamos si hay interrupciones
     let gotInterruption = false;
     processATLessThanBT.some((p) => {
       if (prevIdle) {
@@ -80,6 +95,7 @@ export const srtf = (arrivalTime, burstTime) => {
         readyQueue.push(p);
       }
 
+      // Si el proceso que llega tiene menor tiempo restante, interrumpe
       if (p.bt < remainingTime[processToExecute.job] - amount) {
         remainingTime[processToExecute.job] -= amount;
         readyQueue.push(p);
@@ -95,6 +111,8 @@ export const srtf = (arrivalTime, burstTime) => {
         return true;
       }
     });
+
+    // Agregamos procesos que llegaron durante la ejecución
     const processToArrive = processesInfo.filter((p) => {
       return (
         p.at <= currentTime &&
@@ -104,9 +122,9 @@ export const srtf = (arrivalTime, burstTime) => {
       );
     });
 
-    // Push new processes to readyQueue
     readyQueue.push(...processToArrive);
 
+    // Si no hubo interrupción, ejecutamos el proceso hasta terminar
     if (!gotInterruption) {
       if (prevIdle) {
         const remainingT = remainingTime[processToExecute.job];
@@ -144,10 +162,10 @@ export const srtf = (arrivalTime, burstTime) => {
       }
     }
 
-    // Requeueing (move head/first item to tail/last)
+    // Movemos el proceso al final de la cola
     readyQueue.push(readyQueue.shift());
 
-    // When the process finished executing
+    // Si el proceso terminó, lo removemos y guardamos sus resultados
     if (remainingTime[processToExecute.job] === 0) {
       const indexToRemoveUJ = unfinishedJobs.indexOf(processToExecute);
       if (indexToRemoveUJ > -1) {
@@ -167,7 +185,7 @@ export const srtf = (arrivalTime, burstTime) => {
     }
   }
 
-  // Sort the processes by job name within arrival time
+  // Ordenamos los resultados por tiempo de llegada y nombre del proceso
   solvedProcessesInfo.sort((obj1, obj2) => {
     if (obj1.at > obj2.at) return 1;
     if (obj1.at < obj2.at) return -1;
